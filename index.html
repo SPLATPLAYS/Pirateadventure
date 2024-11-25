@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pirate Adventure</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="menu" class="menu">
+        <h1>Pirate Adventure</h1>
+        <button id="playButton" class="play-button">Play</button>
+        <div class="instructions">
+            <p>Use arrow keys to move</p>
+            <p>Collect treasures ⭐</p>
+            <p>Avoid rocks 🪨</p>
+            <p>Grab powerups ❤️</p>
+        </div>
+    </div>
+    
+    <div id="gameContainer" style="display: none;">
+        <div id="score">Score: 0</div>
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
