@@ -22,6 +22,21 @@ const GAME_STATES = {
     GAMEOVER: 'gameover'
 };
 
+const POWERUP_TYPES = {
+    HEALTH: {type: 'health', icon: '❤️', color: '#FF69B4'},
+    SPEED: {type: 'speed', icon: '⚡', color: '#00FF00'},
+    SHIELD: {type: 'shield', icon: '🛡️', color: '#4169E1'},
+    MULTIPLIER: {type: 'multiplier', icon: '⭐', color: '#FFD700'}
+};
+
+const SCORE_EVENTS = {
+    TREASURE: 10,
+    POWERUP: 25,
+    SURVIVE_TIME: 1
+};
+
+let highScore = localStorage.getItem('highScore') || 0;
+
 let canvas, ctx;
 let ship, treasures, obstacles, waves;
 let score, gameOver;
@@ -201,27 +216,50 @@ function createExplosion(x, y) {
 
 function drawShip() {
     ctx.save();
-    ctx.translate(ship.x + ship.width/2, ship.y + ship.height/2);
+    ctx.translate(ship.x + ship.width / 2, ship.y + ship.height / 2);
     ctx.rotate(ship.rotation);
-    
-    // Draw ship hull
+
+    // Draw wake effect
     ctx.beginPath();
-    ctx.moveTo(-ship.width/2, ship.height/2);
-    ctx.lineTo(0, -ship.height/2);
-    ctx.lineTo(ship.width/2, ship.height/2);
+    ctx.moveTo(-ship.width / 2, ship.height / 2);
+    ctx.quadraticCurveTo(
+        -ship.width,
+        ship.height,
+        -ship.width * 1.5,
+        ship.height * 1.2
+    );
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.stroke();
+    ctx.closePath(); // Close the wake path
+
+    // Draw ship body
+    ctx.beginPath();
+    ctx.moveTo(-ship.width / 2, ship.height / 2);
+    ctx.lineTo(0, -ship.height / 2);
+    ctx.lineTo(ship.width / 2, ship.height / 2);
     ctx.closePath();
     ctx.fillStyle = '#8B4513';
     ctx.fill();
-    
-    // Draw sail
+
+    // Add flag
     ctx.beginPath();
-    ctx.moveTo(0, -ship.height/4);
-    ctx.lineTo(0, -ship.height/2);
-    ctx.lineTo(ship.width/3, -ship.height/4);
-    ctx.closePath();
-    ctx.fillStyle = '#FFFFFF';
+    ctx.moveTo(0, -ship.height / 2);
+    ctx.lineTo(-15, -ship.height / 2 - 15);
+    ctx.lineTo(0, -ship.height / 2 - 10);
+    ctx.closePath(); // Close the flag path
+    ctx.fillStyle = '#FF0000';
     ctx.fill();
-    
+
+    // Draw shield if active
+    if (ship.hasShield) {
+        ctx.beginPath();
+        ctx.arc(0, 0, ship.width, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(65,105,225,0.5)';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        ctx.closePath(); // Close the shield path
+    }
+
     ctx.restore();
 }
 
@@ -270,13 +308,19 @@ function drawTreasures() {
     });
 }
 
+// Add this helper function
+function playSound(soundName) {
+    const sound = SOUND_EFFECTS[soundName].cloneNode();
+    sound.play();
+}
+
+// Modify checkCollisions function
 function checkCollisions() {
     treasures = treasures.filter(treasure => {
         const collision = checkCollision(ship, treasure);
         if (collision) {
-            score += 10 * scoreMultiplier;
-            updateScore();
-            SOUND_EFFECTS.coin.play();
+            updateScore(SCORE_EVENTS.TREASURE); // Use the new function instead of direct play
+            playSound('coin'); // Use the new function instead of direct play
             return false;
         }
         return true;
@@ -305,9 +349,18 @@ function checkObstacleCollision(obstacle) {
     return false;
 }
 
-function updateScore() {
-    const scoreElement = document.getElementById('score');
-    scoreElement.textContent = `Score: ${score}`;
+function updateScore(points) {
+    score += points * scoreMultiplier;
+    if(score > highScore) {
+        highScore = score;
+        localStorage.setItem('highScore', highScore);
+    }
+    updateScoreDisplay();
+}
+
+function updateScoreDisplay() {
+    document.getElementById('score').innerHTML = 
+        `Score: ${score}<br>High Score: ${highScore}`;
 }
 
 // Update the update function to use new collision check
@@ -393,6 +446,14 @@ function increaseDifficulty() {
     if (!gameOver) {
         difficulty += 0.2;
         currentObstacleSpeed *= 1.1;
+        OBSTACLE_SPAWN_INTERVAL = Math.max(2000, OBSTACLE_SPAWN_INTERVAL - 100);
+        TREASURE_SPAWN_INTERVAL = Math.max(1500, TREASURE_SPAWN_INTERVAL - 50);
+        
+        // Add special effects at difficulty milestones
+        if(Math.floor(difficulty) > Math.floor(difficulty - 0.2)) {
+            createParticles(canvas.width/2, canvas.height/2, '#FFD700', 30);
+            playSound('levelUp');
+        }
     }
 }
 
@@ -508,12 +569,7 @@ function drawPowerups() {
         ctx.restore();
         
         if (checkCollision(ship, powerup)) {
-            if (powerup.type === 'health') {
-                health = Math.min(HEALTH_MAX, health + 1);
-            } else {
-                scoreMultiplier *= 2;
-                setTimeout(() => scoreMultiplier = 1, 5000);
-            }
+            applyPowerup(powerup);
             powerups.splice(index, 1);
             SOUND_EFFECTS.collect.play();
             createParticles(powerup.x + powerup.width/2, powerup.y + powerup.height/2, 
@@ -521,6 +577,27 @@ function drawPowerups() {
                           15);
         }
     });
+}
+
+function applyPowerup(powerup) {
+    switch(powerup.type) {
+        case 'health':
+            health = Math.min(HEALTH_MAX, health + 1);
+            break;
+        case 'speed':
+            const oldSpeed = SHIP_SPEED;
+            SHIP_SPEED *= 1.5;
+            setTimeout(() => SHIP_SPEED = oldSpeed, 5000);
+            break;
+        case 'shield':
+            ship.hasShield = true;
+            setTimeout(() => ship.hasShield = false, 8000);
+            break;
+        case 'multiplier':
+            scoreMultiplier *= 2;
+            setTimeout(() => scoreMultiplier = 1, 5000);
+            break;
+    }
 }
 
 function checkCollision(obj1, obj2) {
