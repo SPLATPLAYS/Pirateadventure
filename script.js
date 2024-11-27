@@ -1,8 +1,8 @@
 // Constants
 const SHIP_SPEED = 5;
 const WAVE_HEIGHT = 20;
-const TREASURE_SPAWN_INTERVAL = 3000;
-const OBSTACLE_SPAWN_INTERVAL = 4000;
+let TREASURE_SPAWN_INTERVAL = 3000;
+let OBSTACLE_SPAWN_INTERVAL = 4000;
 const OBSTACLE_SPEED = 2;
 const MIN_OBSTACLE_SIZE = 30;
 const MAX_OBSTACLE_SIZE = 50;
@@ -26,13 +26,22 @@ const POWERUP_TYPES = {
     HEALTH: {type: 'health', icon: '❤️', color: '#FF69B4'},
     SPEED: {type: 'speed', icon: '⚡', color: '#00FF00'},
     SHIELD: {type: 'shield', icon: '🛡️', color: '#4169E1'},
-    MULTIPLIER: {type: 'multiplier', icon: '⭐', color: '#FFD700'}
+    MULTIPLIER: {type: 'multiplier', icon: '⭐', color: '#FFD700'},
+    MAGNET: {type: 'magnet', icon: '🧲', color: '#8B4513'},
+    TIME_SLOW: {type: 'timeSlow', icon: '⏰', color: '#4B0082'}
 };
 
 const SCORE_EVENTS = {
     TREASURE: 10,
     POWERUP: 25,
     SURVIVE_TIME: 1
+};
+
+const DAY_CYCLE_DURATION = 60000; // 1 minute per day cycle
+const WEATHER_STATES = {
+    CLEAR: 'clear',
+    RAIN: 'rain',
+    STORM: 'storm'
 };
 
 let highScore = localStorage.getItem('highScore') || 0;
@@ -47,9 +56,19 @@ let particles;
 let scoreMultiplier;
 let currentObstacleSpeed = OBSTACLE_SPEED;
 let gameState = GAME_STATES.MENU;
+let gameIntervals = [];
+let dayTime = 0; // 0 to 1 (0 = midnight, 0.5 = noon)
+let weather = WEATHER_STATES.CLEAR;
+let raindrops = [];
+let combo = 0;
+let comboTimer = 0;
+let achievements = [];
 
 function initGame() {
-    // Hide menu when game starts
+    // Clear any existing intervals
+    gameIntervals.forEach(interval => clearInterval(interval));
+    gameIntervals = [];
+    
     document.getElementById('menu').style.display = 'none';
     gameState = GAME_STATES.PLAYING;
     
@@ -78,6 +97,11 @@ function initGame() {
     powerups = [];
     particles = [];
     scoreMultiplier = 1;
+    dayTime = 0;
+    weather = WEATHER_STATES.CLEAR;
+    raindrops = [];
+    combo = 0;
+    comboTimer = 0;
 
     // Initialize waves
     for (let i = 0; i < canvas.width/50; i++) {
@@ -94,13 +118,15 @@ function initGame() {
     document.addEventListener('keydown', moveShip);
     document.addEventListener('keyup', stopShip);
 
-    // Start game loop
-    setInterval(generateTreasure, TREASURE_SPAWN_INTERVAL);
-    // Add to initGame function after treasure interval
-    setInterval(generateObstacle, OBSTACLE_SPAWN_INTERVAL);
-    setInterval(increaseDifficulty, DIFFICULTY_INCREASE_INTERVAL);
-    setInterval(generatePowerup, POWERUP_SPAWN_INTERVAL);
-    update();
+    // Store intervals for cleanup
+    gameIntervals.push(setInterval(generateTreasure, TREASURE_SPAWN_INTERVAL));
+    gameIntervals.push(setInterval(generateObstacle, OBSTACLE_SPAWN_INTERVAL));
+    gameIntervals.push(setInterval(increaseDifficulty, DIFFICULTY_INCREASE_INTERVAL));
+    gameIntervals.push(setInterval(generatePowerup, POWERUP_SPAWN_INTERVAL));
+    gameIntervals.push(setInterval(updateDayCycle, 100));
+    gameIntervals.push(setInterval(updateWeather, 30000));
+    
+    requestAnimationFrame(update);
 }
 
 // Add obstacle generation function
@@ -165,22 +191,20 @@ function drawObstacles() {
 
 // Add new function to check all obstacle collisions
 function checkObstacleCollisions() {
+    if (ship.hasShield) return; // Skip if shield active
+    
     for (let i = obstacles.length - 1; i >= 0; i--) {
         const obstacle = obstacles[i];
-        const collision = checkCollision(ship, obstacle);
-        
-        if (collision) {
+        if (checkCollision(ship, obstacle)) {
             health--;
             createParticles(ship.x + ship.width/2, ship.y + ship.height/2, '#FF0000', 20);
             SOUND_EFFECTS.damage.play();
             obstacles.splice(i, 1);
             
             if (health <= 0) {
-                gameOver = true;
-                SOUND_EFFECTS.gameOver.play();
-                showGameOver();
+                endGame();
             }
-            break; // Only process one collision per frame
+            break;
         }
     }
 }
@@ -319,8 +343,10 @@ function checkCollisions() {
     treasures = treasures.filter(treasure => {
         const collision = checkCollision(ship, treasure);
         if (collision) {
-            updateScore(SCORE_EVENTS.TREASURE); // Use the new function instead of direct play
-            playSound('coin'); // Use the new function instead of direct play
+            comboTimer = 60; // 1 second at 60fps
+            combo++;
+            updateScore(SCORE_EVENTS.TREASURE * (1 + combo * 0.5));
+            playSound('coin');
             return false;
         }
         return true;
@@ -383,6 +409,7 @@ function update() {
     }
     
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawEnvironment();
     drawWaves();
     drawShip();
     drawTreasures();
@@ -392,7 +419,18 @@ function update() {
     updateParticles();
     drawParticles();
     drawPowerups();
+    updateCombo();
     
+    // Draw UI elements
+    drawUI();
+    
+    if (!gameOver) {
+        requestAnimationFrame(update);
+    }
+}
+
+// Separate UI drawing for cleaner code
+function drawUI() {
     // Draw health
     for (let i = 0; i < health; i++) {
         ctx.fillStyle = '#FF0000';
@@ -405,8 +443,6 @@ function update() {
         ctx.font = '20px Arial';
         ctx.fillText(`${scoreMultiplier}x`, canvas.width - 50, 30);
     }
-    
-    requestAnimationFrame(update);
 }
 
 function moveShip(e) {
@@ -459,14 +495,88 @@ function increaseDifficulty() {
 
 function generatePowerup() {
     if (!gameOver && powerups.length < 1) {
+        // Get all powerup types from POWERUP_TYPES
+        const powerupTypes = Object.values(POWERUP_TYPES);
+        const randomPowerup = powerupTypes[Math.floor(Math.random() * powerupTypes.length)];
+        
         powerups.push({
             x: Math.random() * (canvas.width - 30),
             y: -30,
             width: 30,
             height: 30,
-            type: Math.random() < 0.5 ? 'health' : 'multiplier',
+            type: randomPowerup.type,
+            icon: randomPowerup.icon,
+            color: randomPowerup.color,
             dy: 2
         });
+    }
+}
+
+// Update drawPowerups to use the new powerup properties
+function drawPowerups() {
+    for (let i = powerups.length - 1; i >= 0; i--) {
+        const powerup = powerups[i];
+        powerup.y += powerup.dy;
+        
+        if (powerup.y > canvas.height) {
+            powerups.splice(i, 1);
+            continue;
+        }
+        
+        ctx.save();
+        // Create gradient
+        const gradient = ctx.createRadialGradient(
+            powerup.x + powerup.width/2, 
+            powerup.y + powerup.height/2, 
+            0,
+            powerup.x + powerup.width/2, 
+            powerup.y + powerup.height/2, 
+            powerup.width/2
+        );
+        
+        gradient.addColorStop(0, powerup.color);
+        gradient.addColorStop(1, '#FFFFFF');
+        
+        // Draw glowing circle
+        ctx.beginPath();
+        ctx.arc(
+            powerup.x + powerup.width/2, 
+            powerup.y + powerup.height/2,
+            powerup.width/2,
+            0,
+            Math.PI * 2
+        );
+        
+        // Add glow effect
+        ctx.shadowColor = powerup.color;
+        ctx.shadowBlur = 15;
+        ctx.fillStyle = gradient;
+        ctx.fill();
+        
+        // Draw icon
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = '20px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(
+            powerup.icon,
+            powerup.x + powerup.width/2,
+            powerup.y + powerup.height/2
+        );
+        
+        ctx.restore();
+        
+        if (checkCollision(ship, powerup)) {
+            applyPowerup(powerup);
+            powerups.splice(i, 1);
+            SOUND_EFFECTS.collect.play();
+            createParticles(
+                powerup.x + powerup.width/2, 
+                powerup.y + powerup.height/2,
+                powerup.color,
+                15
+            );
+        }
     }
 }
 
@@ -508,86 +618,15 @@ function drawParticles() {
     });
 }
 
-// Improve powerup visualization
-function drawPowerups() {
-    powerups.forEach((powerup, index) => {
-        powerup.y += powerup.dy;
-        
-        if (powerup.y > canvas.height) {
-            powerups.splice(index, 1);
-            return;
-        }
-        
-        ctx.save();
-        // Create rainbow gradient
-        const gradient = ctx.createRadialGradient(
-            powerup.x + powerup.width/2, 
-            powerup.y + powerup.height/2, 
-            0,
-            powerup.x + powerup.width/2, 
-            powerup.y + powerup.height/2, 
-            powerup.width/2
-        );
-        
-        if (powerup.type === 'health') {
-            gradient.addColorStop(0, '#FF69B4');
-            gradient.addColorStop(0.5, '#FF1493');
-            gradient.addColorStop(1, '#FF0000');
-        } else {
-            gradient.addColorStop(0, '#FFD700');
-            gradient.addColorStop(0.5, '#FFA500');
-            gradient.addColorStop(1, '#FF8C00');
-        }
-        
-        // Draw glowing circle
-        ctx.beginPath();
-        ctx.arc(
-            powerup.x + powerup.width/2, 
-            powerup.y + powerup.height/2,
-            powerup.width/2,
-            0,
-            Math.PI * 2
-        );
-        
-        // Add glow effect
-        ctx.shadowColor = powerup.type === 'health' ? '#FF69B4' : '#FFD700';
-        ctx.shadowBlur = 15;
-        ctx.fillStyle = gradient;
-        ctx.fill();
-        
-        // Draw icon
-        ctx.fillStyle = '#FFFFFF';
-        ctx.font = '20px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(
-            powerup.type === 'health' ? '❤️' : '⭐',
-            powerup.x + powerup.width/2,
-            powerup.y + powerup.height/2
-        );
-        
-        ctx.restore();
-        
-        if (checkCollision(ship, powerup)) {
-            applyPowerup(powerup);
-            powerups.splice(index, 1);
-            SOUND_EFFECTS.collect.play();
-            createParticles(powerup.x + powerup.width/2, powerup.y + powerup.height/2, 
-                          powerup.type === 'health' ? '#FF69B4' : '#FFD700', 
-                          15);
-        }
-    });
-}
-
 function applyPowerup(powerup) {
     switch(powerup.type) {
         case 'health':
             health = Math.min(HEALTH_MAX, health + 1);
             break;
         case 'speed':
-            const oldSpeed = SHIP_SPEED;
+            const oldShipSpeed = SHIP_SPEED;
             SHIP_SPEED *= 1.5;
-            setTimeout(() => SHIP_SPEED = oldSpeed, 5000);
+            setTimeout(() => SHIP_SPEED = oldShipSpeed, 5000);
             break;
         case 'shield':
             ship.hasShield = true;
@@ -597,6 +636,25 @@ function applyPowerup(powerup) {
             scoreMultiplier *= 2;
             setTimeout(() => scoreMultiplier = 1, 5000);
             break;
+        case 'magnet':
+            const magnetEffect = setInterval(() => {
+                treasures.forEach(treasure => {
+                    const dx = ship.x - treasure.x;
+                    const dy = ship.y - treasure.y;
+                    const dist = Math.sqrt(dx * dx + dy * dy);
+                    if (dist < 200) {
+                        treasure.x += dx * 0.1;
+                        treasure.y += dy * 0.1;
+                    }
+                });
+            }, 16);
+            setTimeout(() => clearInterval(magnetEffect), 5000);
+            break;
+        case 'timeSlow':
+            const oldObstacleSpeed = currentObstacleSpeed;
+            currentObstacleSpeed *= 0.5;
+            setTimeout(() => currentObstacleSpeed = oldObstacleSpeed, 5000);
+            break;
     }
 }
 
@@ -604,13 +662,21 @@ function checkCollision(obj1, obj2) {
     return obj1.x < obj2.x + obj2.width &&
            obj1.x + obj1.width > obj2.x &&
            obj1.y < obj2.y + obj2.height &&
-           obj1.y + obj2.height > obj2.y;
+           obj1.y + obj2.height > obj2.y; // Fixed y-axis check
 }
 
 function restart() {
     if (gameOver) {
         initGame();
     }
+}
+
+function endGame() {
+    gameOver = true;
+    SOUND_EFFECTS.gameOver.play();
+    gameIntervals.forEach(interval => clearInterval(interval));
+    gameIntervals = [];
+    showGameOver();
 }
 
 function showMenu() {
@@ -635,3 +701,80 @@ document.getElementById('playButton').addEventListener('click', () => {
 // Remove the automatic game start
 document.removeEventListener('DOMContentLoaded', initGame);
 document.addEventListener('DOMContentLoaded', showMenu);
+
+function updateDayCycle() {
+    dayTime = (dayTime + 0.1/600) % 1;
+}
+
+function updateWeather() {
+    if (Math.random() < 0.3) {
+        weather = Object.values(WEATHER_STATES)[Math.floor(Math.random() * 3)];
+        if (weather !== WEATHER_STATES.CLEAR) {
+            createRaindrops();
+        }
+    }
+}
+
+function createRaindrops() {
+    if (weather === WEATHER_STATES.RAIN || weather === WEATHER_STATES.STORM) {
+        for (let i = 0; i < 5; i++) {
+            raindrops.push({
+                x: Math.random() * canvas.width,
+                y: -10,
+                speed: weather === WEATHER_STATES.STORM ? 15 : 10,
+                length: weather === WEATHER_STATES.STORM ? 20 : 10
+            });
+        }
+    }
+}
+
+function drawEnvironment() {
+    // Draw sky gradient based on time of day
+    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    
+    if (dayTime < 0.25 || dayTime > 0.75) { // Night
+        gradient.addColorStop(0, '#000033');
+        gradient.addColorStop(1, '#000066');
+    } else { // Day
+        gradient.addColorStop(0, '#87CEEB');
+        gradient.addColorStop(1, '#4169E1');
+    }
+    
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Draw weather effects
+    if (weather !== WEATHER_STATES.CLEAR) {
+        updateRain();
+    }
+}
+
+function updateRain() {
+    ctx.strokeStyle = 'rgba(174, 194, 224, 0.5)';
+    ctx.lineWidth = 1;
+    
+    for (let i = raindrops.length - 1; i >= 0; i--) {
+        const drop = raindrops[i];
+        
+        ctx.beginPath();
+        ctx.moveTo(drop.x, drop.y);
+        ctx.lineTo(drop.x + (weather === WEATHER_STATES.STORM ? 5 : 0), 
+                  drop.y + drop.length);
+        ctx.stroke();
+        
+        drop.y += drop.speed;
+        drop.x += weather === WEATHER_STATES.STORM ? 2 : 0;
+        
+        if (drop.y > canvas.height) {
+            raindrops.splice(i, 1);
+        }
+    }
+}
+
+function updateCombo() {
+    if (comboTimer > 0) {
+        comboTimer--;
+    } else if (combo > 0) {
+        combo = 0;
+    }
+}
