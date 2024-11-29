@@ -1,5 +1,6 @@
 // Constants
-const SHIP_SPEED = 5;
+let SHIP_SPEED = 5;
+let baseShipSpeed = 5;
 const WAVE_HEIGHT = 20;
 let TREASURE_SPAWN_INTERVAL = 3000;
 let OBSTACLE_SPAWN_INTERVAL = 4000;
@@ -9,7 +10,7 @@ const MAX_OBSTACLE_SIZE = 50;
 const OBSTACLE_COLORS = ['#FF4444', '#FF6B6B', '#FA8072'];
 const POWERUP_SPAWN_INTERVAL = 10000;
 const DIFFICULTY_INCREASE_INTERVAL = 20000;
-const HEALTH_MAX = 3;
+const HEALTH_MAX = 3
 const SOUND_EFFECTS = {
     collect: new Audio('collect.mp3'),
     coin: new Audio('coin.mp3'),
@@ -44,6 +45,14 @@ const WEATHER_STATES = {
     STORM: 'storm'
 };
 
+const API_BASE = 'https://my-own-counter-api-production.up.railway.app';
+const NAMESPACE = 'pirateadventure'; // Unique namespace for the game
+const LEADERBOARD_SIZE = 5; // Number of top scores to show
+const MAX_LEADERBOARD_SIZE = 10;
+const SCORE_BUCKET_SIZE = 100;
+const MAX_SCORES = 10;
+const LEADERBOARD_KEY = `${NAMESPACE}_scores`; // Key for storing all scores
+
 let highScore = localStorage.getItem('highScore') || 0;
 
 let canvas, ctx;
@@ -63,6 +72,16 @@ let raindrops = [];
 let combo = 0;
 let comboTimer = 0;
 let achievements = [];
+
+// Add these debug functions at the top
+const DEBUG = true;
+function log(...args) {
+    if (DEBUG) console.log(...args);
+}
+
+// Add these constants
+const LEADERBOARD_CACHE_KEY = 'pirateLeaderboardCache';
+const LEADERBOARD_CACHE_DURATION = 60000; // 1 minute
 
 function initGame() {
     // Clear any existing intervals
@@ -127,6 +146,7 @@ function initGame() {
     gameIntervals.push(setInterval(updateWeather, 30000));
     
     requestAnimationFrame(update);
+    updateLeaderboard(); // Load initial leaderboard
 }
 
 // Add obstacle generation function
@@ -624,9 +644,11 @@ function applyPowerup(powerup) {
             health = Math.min(HEALTH_MAX, health + 1);
             break;
         case 'speed':
-            const oldShipSpeed = SHIP_SPEED;
-            SHIP_SPEED *= 1.5;
-            setTimeout(() => SHIP_SPEED = oldShipSpeed, 5000);
+            const currentSpeed = SHIP_SPEED;
+            SHIP_SPEED = baseShipSpeed * 1.5;
+            setTimeout(() => {
+                SHIP_SPEED = baseShipSpeed;
+            }, 5000);
             break;
         case 'shield':
             ship.hasShield = true;
@@ -660,7 +682,7 @@ function applyPowerup(powerup) {
 
 function checkCollision(obj1, obj2) {
     return obj1.x < obj2.x + obj2.width &&
-           obj1.x + obj1.width > obj2.x &&
+           obj1.x + obj2.width > obj2.x &&
            obj1.y < obj2.y + obj2.height &&
            obj1.y + obj2.height > obj2.y; // Fixed y-axis check
 }
@@ -676,12 +698,20 @@ function endGame() {
     SOUND_EFFECTS.gameOver.play();
     gameIntervals.forEach(interval => clearInterval(interval));
     gameIntervals = [];
+    
+    // Save score to leaderboard if it's above 0
+    if (score > 0) {
+        saveScore(score);
+    }
+    
     showGameOver();
+    updateLeaderboard();
 }
 
 function showMenu() {
     gameState = GAME_STATES.MENU;
     document.getElementById('menu').style.display = 'flex';
+    updateLeaderboard();
 }
 
 document.addEventListener('keydown', e => {
@@ -776,5 +806,126 @@ function updateCombo() {
         comboTimer--;
     } else if (combo > 0) {
         combo = 0;
+    }
+}
+
+function getBucketKey(score) {
+    return Math.floor(score / SCORE_BUCKET_SIZE);
+}
+
+// Modify saveScore function 
+async function saveScore(score) {
+    try {
+        if (score <= 0) return;
+        
+        // Get existing scores
+        const scores = await getLeaderboard();
+        scores.push(score);
+        scores.sort((a, b) => b - a);
+        scores.splice(MAX_SCORES); // Keep only top 10
+
+        // Reset all score counters using URL parameters
+        for(let i = 0; i < MAX_SCORES; i++) {
+            await fetch(`${API_BASE}/set/${NAMESPACE}/score${i}?value=${scores[i] || 0}`, {
+                method: 'PUT'
+            });
+        }
+
+        // Update cache
+        localStorage.setItem(LEADERBOARD_CACHE_KEY, JSON.stringify({
+            scores,
+            timestamp: Date.now()
+        }));
+
+        await updateLeaderboard();
+    } catch (error) {
+        log('Error saving score:', error);
+    }
+}
+
+// Modify getLeaderboard function
+async function getLeaderboard() {
+    try {
+        const cache = JSON.parse(localStorage.getItem(LEADERBOARD_CACHE_KEY) || '{"scores":[], "timestamp":0}');
+        const now = Date.now();
+
+        if (now - cache.timestamp < LEADERBOARD_CACHE_DURATION) {
+            return cache.scores;
+        }
+
+        const scores = [];
+        // Fetch individual score counters
+        for(let i = 0; i < MAX_SCORES; i++) {
+            const response = await fetch(`${API_BASE}/get/${NAMESPACE}/score${i}`);
+            const data = await response.json();
+            log(`Score ${i}:`, data); // Debug log
+            if (data && typeof data.count === 'number' && data.count > 0) { // Changed value to count
+                scores.push(data.count);
+            }
+        }
+
+        scores.sort((a, b) => b - a);
+        log('Sorted scores:', scores); // Debug log
+
+        localStorage.setItem(LEADERBOARD_CACHE_KEY, JSON.stringify({
+            scores,
+            timestamp: now
+        }));
+
+        return scores;
+    } catch (error) {
+        log('Error fetching leaderboard:', error);
+        return [];
+    }
+}
+
+// Modify updateLeaderboard function
+async function updateLeaderboard() {
+    const leaderboardEl = document.getElementById('leaderboard');
+    if (!leaderboardEl) return;
+
+    try {
+        const scores = await getLeaderboard();
+        log('Fetched scores:', scores);
+        
+        if (!scores || scores.length === 0) {
+            leaderboardEl.innerHTML = `
+                <h2>High Scores</h2>
+                <div class="score-entry">No scores yet!</div>
+            `;
+            return;
+        }
+
+        // Format scores list with medal colors
+        const scoresList = scores
+            .filter(score => score > 0)
+            .map((score, index) => `
+                <div class="score-entry ${getMedalClass(index)}">
+                    ${index + 1}. ${score} pts
+                </div>
+            `).join('');
+
+        leaderboardEl.innerHTML = `
+            <h2>High Scores</h2>
+            ${scoresList || '<div class="score-entry">No scores yet!</div>'}
+        `;
+        
+        log('Updated leaderboard HTML:', leaderboardEl.innerHTML);
+    } catch (err) {
+        log('Error updating leaderboard:', err);
+        leaderboardEl.innerHTML = `
+            <h2>High Scores</h2>
+            <div class="score-entry">Error loading scores</div>
+        `;
+    }
+}
+
+// Add helper function for medal classes
+function getMedalClass(index) {
+    switch(index) {
+        case 0: return 'gold-medal';
+        case 1: return 'silver-medal';
+        case 2: return 'bronze-medal';
+        default: return '';
     }
 }

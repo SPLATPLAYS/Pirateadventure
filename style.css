@@ -63,3 +63,44 @@ body {
     display: none;
     position: relative;
 }
+
+/* Update CSS for better visibility */
+.leaderboard {
+    margin-top: 20px;
+    padding: 15px;
+    background: rgba(0, 0, 0, 0.8);
+    border-radius: 10px;
+    min-width: 250px;
+    cursor: default;
+}
+
+.leaderboard h2 {
+    color: #FFD700;
+    text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+    margin-bottom: 15px;
+    font-size: 24px;
+}
+
+.score-entry.gold-medal {
+    background: linear-gradient(45deg, #FFD700, #FFA500);
+    color: #000;
+    font-weight: bold;
+}
+
+.score-entry.silver-medal {
+    background: linear-gradient(45deg, #C0C0C0, #A9A9A9);
+    color: #000;
+    font-weight: bold;
+}
+
+.score-entry.bronze-medal {
+    background: linear-gradient(45deg, #CD7F32, #8B4513);
+    color: #FFF;
+    font-weight: bold;
+}
+
+.score-entry {
+    padding: 8px;
+    margin: 4px 0;
+    border-radius: 4px;
+}
