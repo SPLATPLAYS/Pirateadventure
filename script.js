@@ -11,11 +11,12 @@ const OBSTACLE_COLORS = ['#FF4444', '#FF6B6B', '#FA8072'];
 const POWERUP_SPAWN_INTERVAL = 10000;
 const DIFFICULTY_INCREASE_INTERVAL = 20000;
 const HEALTH_MAX = 3
+// Replace the simple SOUND_EFFECTS object with a sound pool system
 const SOUND_EFFECTS = {
-    collect: new Audio('collect.mp3'),
-    coin: new Audio('coin.mp3'),
-    damage: new Audio('damage.mp3'),
-    gameOver: new Audio('gameover.mp3')
+    collect: { pool: [], size: 5, src: 'collect.mp3' },
+    coin: { pool: [], size: 5, src: 'coin.mp3' },
+    damage: { pool: [], size: 3, src: 'damage.mp3' },
+    gameOver: { pool: [], size: 1, src: 'gameover.mp3' }
 };
 const GAME_STATES = {
     MENU: 'menu',
@@ -122,6 +123,8 @@ function initGame() {
     combo = 0;
     comboTimer = 0;
 
+    initSoundPools();
+
     // Initialize waves
     for (let i = 0; i < canvas.width/50; i++) {
         waves.push({
@@ -209,25 +212,6 @@ function drawObstacles() {
     }
 }
 
-// Add new function to check all obstacle collisions
-function checkObstacleCollisions() {
-    if (ship.hasShield) return; // Skip if shield active
-    
-    for (let i = obstacles.length - 1; i >= 0; i--) {
-        const obstacle = obstacles[i];
-        if (checkCollision(ship, obstacle)) {
-            health--;
-            createParticles(ship.x + ship.width/2, ship.y + ship.height/2, '#FF0000', 20);
-            SOUND_EFFECTS.damage.play();
-            obstacles.splice(i, 1);
-            
-            if (health <= 0) {
-                endGame();
-            }
-            break;
-        }
-    }
-}
 
 // Modify showGameOver to show menu again
 function showGameOver() {
@@ -352,10 +336,35 @@ function drawTreasures() {
     });
 }
 
-// Add this helper function
+// Initialize sound pools
+function initSoundPools() {
+    for (const sound of Object.values(SOUND_EFFECTS)) {
+        for (let i = 0; i < sound.size; i++) {
+            const audio = new Audio(sound.src);
+            audio.volume = 0.5; // Adjust volume as needed
+            sound.pool.push(audio);
+        }
+    }
+}
+
+// Replace playSound function with this version
 function playSound(soundName) {
-    const sound = SOUND_EFFECTS[soundName].cloneNode();
-    sound.play();
+    if (!SOUND_EFFECTS[soundName]) return;
+    
+    // Find an audio element that's not playing
+    const soundPool = SOUND_EFFECTS[soundName].pool;
+    const availableSound = soundPool.find(audio => audio.paused);
+    
+    if (availableSound) {
+        availableSound.currentTime = 0;
+        availableSound.play().catch(e => console.log('Sound play error:', e));
+    } else {
+        // If all sounds are playing, create a new one
+        const newSound = new Audio(SOUND_EFFECTS[soundName].src);
+        newSound.volume = 0.5;
+        SOUND_EFFECTS[soundName].pool.push(newSound);
+        newSound.play().catch(e => console.log('Sound play error:', e));
+    }
 }
 
 // Modify checkCollisions function
@@ -373,27 +382,7 @@ function checkCollisions() {
     });
 }
 
-// Fix checkObstacleCollision function 
-function checkObstacleCollision(obstacle) {
-    const collision = checkCollision(ship, obstacle);
-           
-    if (collision) {
-        health--;
-        createParticles(ship.x + ship.width/2, ship.y + ship.height/2, '#FF0000', 20);
-        SOUND_EFFECTS.damage.play();
-        
-        // Remove obstacle after collision
-        obstacles = obstacles.filter(o => o !== obstacle);
-        
-        if (health <= 0) {
-            gameOver = true;
-            SOUND_EFFECTS.gameOver.play();
-            showGameOver();
-        }
-        return true;
-    }
-    return false;
-}
+
 
 function updateScore(points) {
     score += points * scoreMultiplier;
@@ -434,8 +423,7 @@ function update() {
     drawShip();
     drawTreasures();
     drawObstacles();
-    checkCollisions();
-    checkObstacleCollisions(); // Add this line
+    handleCollisions(); // Add this line
     updateParticles();
     drawParticles();
     drawPowerups();
@@ -586,17 +574,18 @@ function drawPowerups() {
         
         ctx.restore();
         
-        if (checkCollision(ship, powerup)) {
-            applyPowerup(powerup);
-            powerups.splice(i, 1);
-            SOUND_EFFECTS.collect.play();
-            createParticles(
-                powerup.x + powerup.width/2, 
-                powerup.y + powerup.height/2,
-                powerup.color,
-                15
-            );
-        }
+// Fix in drawPowerups function (where powerup is collected)
+if (checkCollision(ship, powerup)) {
+    applyPowerup(powerup);
+    powerups.splice(i, 1);
+    playSound('collect'); // Changed from SOUND_EFFECTS.collect.play()
+    createParticles(
+        powerup.x + powerup.width/2, 
+        powerup.y + powerup.height/2,
+        powerup.color,
+        15
+    );
+}
     }
 }
 
@@ -693,13 +682,18 @@ function restart() {
     }
 }
 
+function cleanup() {
+    gameIntervals.forEach(clearInterval);
+    gameIntervals = [];
+    document.removeEventListener('keydown', moveShip);
+    document.removeEventListener('keyup', stopShip);
+}
+
 function endGame() {
     gameOver = true;
-    SOUND_EFFECTS.gameOver.play();
-    gameIntervals.forEach(interval => clearInterval(interval));
-    gameIntervals = [];
+    playSound('gameOver'); // Changed from SOUND_EFFECTS.gameOver.play()
+    cleanup();
     
-    // Save score to leaderboard if it's above 0
     if (score > 0) {
         saveScore(score);
     }
@@ -928,4 +922,38 @@ function getMedalClass(index) {
         case 2: return 'bronze-medal';
         default: return '';
     }
+}
+
+// Fix in handleCollisions function
+function handleCollisions() {
+    if (!ship.hasShield) {
+        // Handle obstacle collisions
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+            const obstacle = obstacles[i];
+            if (checkCollision(ship, obstacle)) {
+                health--;
+                createParticles(ship.x + ship.width/2, ship.y + ship.height/2, '#FF0000', 20);
+                playSound('damage'); // Changed from SOUND_EFFECTS.damage.play()
+                obstacles.splice(i, 1);
+                
+                if (health <= 0) {
+                    endGame();
+                    return;
+                }
+                break;
+            }
+        }
+    }
+    
+    // Handle treasure collisions
+    treasures = treasures.filter(treasure => {
+        if (checkCollision(ship, treasure)) {
+            comboTimer = 60;
+            combo++;
+            updateScore(SCORE_EVENTS.TREASURE * (1 + combo * 0.5));
+            playSound('coin'); // Changed from SOUND_EFFECTS.coin.play()
+            return false;
+        }
+        return true;
+    });
 }
