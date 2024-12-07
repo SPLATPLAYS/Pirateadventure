@@ -16,7 +16,8 @@ const SOUND_EFFECTS = {
     collect: { pool: [], size: 5, src: 'collect.mp3' },
     coin: { pool: [], size: 5, src: 'coin.mp3' },
     damage: { pool: [], size: 3, src: 'damage.mp3' },
-    gameOver: { pool: [], size: 1, src: 'gameover.mp3' }
+    gameOver: { pool: [], size: 1, src: 'gameover.mp3' },
+    shoot: { pool: [], size: 5, src: 'shoot.mp3' }
 };
 const GAME_STATES = {
     MENU: 'menu',
@@ -54,6 +55,9 @@ const SCORE_BUCKET_SIZE = 100;
 const MAX_SCORES = 10;
 const LEADERBOARD_KEY = `${NAMESPACE}_scores`; // Key for storing all scores
 
+const ENEMY_SHIP_SPEED = 2; // Adjust the speed as desired
+const ENEMY_BULLET_SPEED = 4;
+
 let highScore = localStorage.getItem('highScore') || 0;
 
 let canvas, ctx;
@@ -70,9 +74,14 @@ let gameIntervals = [];
 let dayTime = 0; // 0 to 1 (0 = midnight, 0.5 = noon)
 let weather = WEATHER_STATES.CLEAR;
 let raindrops = [];
+let weatherDuration = 0; // Duration in milliseconds
 let combo = 0;
 let comboTimer = 0;
+let maxCombo = 0;
 let achievements = [];
+let enemyShipSpawnInterval = 20000; // Start with 20 seconds
+let enemyShipInterval;
+let enemyBullets = [];
 
 // Add these debug functions at the top
 const DEBUG = true;
@@ -89,6 +98,8 @@ function initGame() {
     gameIntervals.forEach(interval => clearInterval(interval));
     gameIntervals = [];
     
+    enemyBullets = [];
+
     document.getElementById('menu').style.display = 'none';
     gameState = GAME_STATES.PLAYING;
     
@@ -122,6 +133,10 @@ function initGame() {
     raindrops = [];
     combo = 0;
     comboTimer = 0;
+    enemyShips = [];
+    enemyBullets = [];
+    enemyShipSpawnInterval = 20000; // Reset to 20 seconds
+
 
     initSoundPools();
 
@@ -136,6 +151,10 @@ function initGame() {
         });
     }
 
+    // Start enemy ship interval
+    enemyShipInterval = setInterval(generateEnemyShip, enemyShipSpawnInterval);
+    gameIntervals.push(enemyShipInterval);
+
     // Event listeners
     document.addEventListener('keydown', moveShip);
     document.addEventListener('keyup', stopShip);
@@ -146,7 +165,7 @@ function initGame() {
     gameIntervals.push(setInterval(increaseDifficulty, DIFFICULTY_INCREASE_INTERVAL));
     gameIntervals.push(setInterval(generatePowerup, POWERUP_SPAWN_INTERVAL));
     gameIntervals.push(setInterval(updateDayCycle, 100));
-    gameIntervals.push(setInterval(updateWeather, 30000));
+    gameIntervals.push(setInterval(updateWeather, 100));
     
     requestAnimationFrame(update);
     updateLeaderboard(); // Load initial leaderboard
@@ -213,23 +232,38 @@ function drawObstacles() {
 }
 
 
-// Modify showGameOver to show menu again
-function showGameOver() {
-    const finalScore = score;
-    document.getElementById('score').textContent = `Game Over! Final Score: ${finalScore}`;
-    
-    // Add visual effect
-    ctx.save();
-    ctx.fillStyle = 'rgba(255, 0, 0, 0.3)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.restore();
-    
-    createExplosion(ship.x + ship.width/2, ship.y + ship.height/2);
-    
-    // Show menu after delay
-    setTimeout(() => {
-        document.getElementById('gameContainer').style.display = 'none';
-        showMenu();
+async function showGameOver() {
+    // Wait 2 seconds after the crash
+    setTimeout(async () => {
+        // Fade the screen to darker
+        ctx.save();
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.restore();
+
+        // Display final score and rank
+        ctx.fillStyle = '#FFFFFF';
+        ctx.font = '36px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('Game Over', canvas.width / 2, canvas.height / 2 - 60);
+        ctx.fillText(`Final Score: ${score}`, canvas.width / 2, canvas.height / 2 - 20);
+
+        // Check if the score is in the top 10
+        const leaderboard = await getLeaderboard();
+        const rank = leaderboard.findIndex(s => score >= s) + 1;
+
+        if (rank > 0 && rank <= 10) {
+            ctx.fillText(`You ranked #${rank} on the leaderboard!`, canvas.width / 2, canvas.height / 2 + 20);
+        }
+
+        // Display gameplay analytics
+        ctx.fillText(`Max Combo: ${maxCombo}`, canvas.width / 2, canvas.height / 2 + 60);
+
+        // Show menu after delay
+        setTimeout(() => {
+            document.getElementById('gameContainer').style.display = 'none';
+            showMenu();
+        }, 3000);
     }, 2000);
 }
 
@@ -423,6 +457,12 @@ function update() {
     drawShip();
     drawTreasures();
     drawObstacles();
+
+    updateEnemyShips();
+    drawEnemyShips(); // Ensure this function draws enemy ships
+    updateEnemyBullets();
+    drawEnemyBullets();
+
     handleCollisions(); // Add this line
     updateParticles();
     drawParticles();
@@ -492,10 +532,16 @@ function increaseDifficulty() {
         currentObstacleSpeed *= 1.1;
         OBSTACLE_SPAWN_INTERVAL = Math.max(2000, OBSTACLE_SPAWN_INTERVAL - 100);
         TREASURE_SPAWN_INTERVAL = Math.max(1500, TREASURE_SPAWN_INTERVAL - 50);
-        
-        // Add special effects at difficulty milestones
-        if(Math.floor(difficulty) > Math.floor(difficulty - 0.2)) {
-            createParticles(canvas.width/2, canvas.height/2, '#FFD700', 30);
+        enemyShipSpawnInterval = Math.max(5000, enemyShipSpawnInterval - 2000); // Decrease to minimum 5 seconds
+
+        // Update the enemy ship spawn interval
+        clearInterval(enemyShipInterval);
+        enemyShipInterval = setInterval(generateEnemyShip, enemyShipSpawnInterval);
+        gameIntervals.push(enemyShipInterval);
+
+        // Special effects at difficulty milestones
+        if (Math.floor(difficulty) > Math.floor(difficulty - 0.2)) {
+            createParticles(canvas.width / 2, canvas.height / 2, '#FFD700', 30);
             playSound('levelUp');
         }
     }
@@ -685,10 +731,10 @@ function restart() {
 function cleanup() {
     gameIntervals.forEach(clearInterval);
     gameIntervals = [];
+    clearInterval(enemyShipInterval); // Clear the enemy ship interval
     document.removeEventListener('keydown', moveShip);
     document.removeEventListener('keyup', stopShip);
 }
-
 function endGame() {
     gameOver = true;
     playSound('gameOver'); // Changed from SOUND_EFFECTS.gameOver.play()
@@ -727,21 +773,43 @@ document.removeEventListener('DOMContentLoaded', initGame);
 document.addEventListener('DOMContentLoaded', showMenu);
 
 function updateDayCycle() {
-    dayTime = (dayTime + 0.1/600) % 1;
+    // Increment dayTime smoothly
+    dayTime = (dayTime + 0.0005) % 1; // Adjust increment for desired speed
 }
 
 function updateWeather() {
-    if (Math.random() < 0.3) {
-        weather = Object.values(WEATHER_STATES)[Math.floor(Math.random() * 3)];
-        if (weather !== WEATHER_STATES.CLEAR) {
-            createRaindrops();
+    // Decrease the weather duration
+    if (weatherDuration > 0) {
+        weatherDuration -= 100; // Decrease by update interval
+    } else {
+        // Only change weather when duration has elapsed
+        if (Math.random() < 0.3) {
+            // Randomly select new weather state
+            weather = Object.values(WEATHER_STATES)[Math.floor(Math.random() * 3)];
+            if (weather === WEATHER_STATES.RAIN || weather === WEATHER_STATES.STORM) {
+                weatherDuration = 5000; // Set duration to at least 5 seconds
+            } else {
+                weatherDuration = 0; // Clear weather has no duration
+            }
+        } else {
+            weather = WEATHER_STATES.CLEAR;
+            weatherDuration = 0;
         }
+    }
+
+    if (weather === WEATHER_STATES.RAIN || weather === WEATHER_STATES.STORM) {
+        createRaindrops();
+    }
+    if (weatherDuration <= 0 && (weather === WEATHER_STATES.RAIN || weather === WEATHER_STATES.STORM)) {
+        weather = WEATHER_STATES.CLEAR;
     }
 }
 
 function createRaindrops() {
     if (weather === WEATHER_STATES.RAIN || weather === WEATHER_STATES.STORM) {
-        for (let i = 0; i < 5; i++) {
+        // Increase raindrop count for storm
+        const raindropCount = weather === WEATHER_STATES.STORM ? 10 : 5;
+        for (let i = 0; i < raindropCount; i++) {
             raindrops.push({
                 x: Math.random() * canvas.width,
                 y: -10,
@@ -753,25 +821,79 @@ function createRaindrops() {
 }
 
 function drawEnvironment() {
-    // Draw sky gradient based on time of day
-    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-    
-    if (dayTime < 0.25 || dayTime > 0.75) { // Night
-        gradient.addColorStop(0, '#000033');
-        gradient.addColorStop(1, '#000066');
-    } else { // Day
-        gradient.addColorStop(0, '#87CEEB');
-        gradient.addColorStop(1, '#4169E1');
+    // Calculate interpolation factor
+    let t = 0;
+    if (dayTime < 0.25) {
+        // Night to dawn (0 to 0.25)
+        t = dayTime / 0.25;
+    } else if (dayTime < 0.5) {
+        // Dawn to day (0.25 to 0.5)
+        t = (dayTime - 0.25) / 0.25;
+    } else if (dayTime < 0.75) {
+        // Day to dusk (0.5 to 0.75)
+        t = (dayTime - 0.5) / 0.25;
+    } else {
+        // Dusk to night (0.75 to 1)
+        t = (dayTime - 0.75) / 0.25;
     }
-    
+
+    // Determine colors based on time segments
+    let skyColorTop, skyColorBottom;
+    if (dayTime < 0.25) {
+        // Night to dawn
+        skyColorTop = interpolateColor('#000033', '#FFA07A', t);
+        skyColorBottom = interpolateColor('#000066', '#FFD700', t);
+    } else if (dayTime < 0.5) {
+        // Dawn to day
+        skyColorTop = interpolateColor('#FFA07A', '#87CEEB', t);
+        skyColorBottom = interpolateColor('#FFD700', '#4169E1', t);
+    } else if (dayTime < 0.75) {
+        // Day to dusk
+        skyColorTop = interpolateColor('#87CEEB', '#FFA07A', t);
+        skyColorBottom = interpolateColor('#4169E1', '#FFD700', t);
+    } else {
+        // Dusk to night
+        skyColorTop = interpolateColor('#FFA07A', '#000033', t);
+        skyColorBottom = interpolateColor('#FFD700', '#000066', t);
+    }
+
+    // Create gradient
+    const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    gradient.addColorStop(0, skyColorTop);
+    gradient.addColorStop(1, skyColorBottom);
+
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
+
     // Draw weather effects
-    if (weather !== WEATHER_STATES.CLEAR) {
+    if (weather === WEATHER_STATES.RAIN || weather === WEATHER_STATES.STORM) {
         updateRain();
     }
 }
+
+function interpolateColor(color1, color2, factor) {
+    // Parse colors
+    const c1 = {
+        r: parseInt(color1.slice(1, 3), 16),
+        g: parseInt(color1.slice(3, 5), 16),
+        b: parseInt(color1.slice(5, 7), 16)
+    };
+    const c2 = {
+        r: parseInt(color2.slice(1, 3), 16),
+        g: parseInt(color2.slice(3, 5), 16),
+        b: parseInt(color2.slice(5, 7), 16)
+    };
+
+    // Interpolate each component
+    const r = Math.round(c1.r + (c2.r - c1.r) * factor).toString(16).padStart(2, '0');
+    const g = Math.round(c1.g + (c2.g - c1.g) * factor).toString(16).padStart(2, '0');
+    const b = Math.round(c1.b + (c2.b - c1.b) * factor).toString(16).padStart(2, '0');
+
+    return `#${r}${g}${b}`;
+}
+
+
+
 
 function updateRain() {
     ctx.strokeStyle = 'rgba(174, 194, 224, 0.5)';
@@ -796,6 +918,9 @@ function updateRain() {
 }
 
 function updateCombo() {
+    if (combo > maxCombo) {
+        maxCombo = combo;
+    }
     if (comboTimer > 0) {
         comboTimer--;
     } else if (combo > 0) {
@@ -956,4 +1081,137 @@ function handleCollisions() {
         }
         return true;
     });
+    
+
 }
+
+function generateEnemyShip() {
+    if (!gameOver) {
+        enemyShips.push({
+            x: Math.random() * (canvas.width - 50),
+            y: -50,
+            width: 50,
+            height: 50,
+            dx: 0, // No horizontal movement
+            dy: ENEMY_SHIP_SPEED, // Move downward
+            shootCooldown: Math.random() * 1000 + 3000, // 3-4 seconds
+        });
+    }
+}
+
+function updateEnemyShips() {
+    enemyShips.forEach((enemy, index) => {
+        enemy.y += enemy.dy;
+
+        // Decrease shoot cooldown
+        enemy.shootCooldown -= 16.67; // Approximate frame time in ms (assuming 60fps)
+
+        if (enemy.shootCooldown <= 0) {
+            // Calculate direction towards the player
+            const dx = (ship.x + ship.width / 2) - (enemy.x + enemy.width / 2);
+            const dy = (ship.y + ship.height / 2) - (enemy.y + enemy.height);
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            // Normalize vector and multiply by speed
+            const speedFactor = ENEMY_BULLET_SPEED / distance;
+            const velocityX = dx * speedFactor;
+            const velocityY = dy * speedFactor;
+
+            // Enemy shoots
+            enemyBullets.push({
+                x: enemy.x + enemy.width / 2 - 5, // Adjust for bullet size
+                y: enemy.y + enemy.height,
+                width: 10,   // Increased bullet width
+                height: 20,  // Increased bullet height
+                dx: velocityX,
+                dy: velocityY,
+            });
+
+            // Play shoot sound
+            playSound('shoot');
+
+            // Reset cooldown to 3-4 seconds
+            enemy.shootCooldown = Math.random() * 1000 + 3000;
+        }
+
+        // Remove enemy if off-screen
+        if (enemy.y > canvas.height) {
+            enemyShips.splice(index, 1);
+        }
+    });
+}
+
+function updateEnemyBullets() {
+    for (let i = enemyBullets.length - 1; i >= 0; i--) {
+        const bullet = enemyBullets[i];
+        bullet.x += bullet.dx;
+        bullet.y += bullet.dy;
+
+        // Remove bullet if off-screen
+        if (
+            bullet.y > canvas.height ||
+            bullet.y < -bullet.height ||
+            bullet.x > canvas.width ||
+            bullet.x < -bullet.width
+        ) {
+            enemyBullets.splice(i, 1);
+            continue;
+        }
+
+        // Check collision with player ship
+        if (checkCollision(bullet, ship)) {
+            if (!ship.hasShield) {
+                health--;
+                createParticles(ship.x + ship.width / 2, ship.y + ship.height / 2, '#FF0000', 20);
+                playSound('damage');
+                enemyBullets.splice(i, 1);
+
+                if (health <= 0) {
+                    endGame();
+                    return;
+                }
+            } else {
+                // Bullet is destroyed by shield
+                enemyBullets.splice(i, 1);
+            }
+        }
+    }
+}
+
+function drawEnemyBullets() {
+    enemyBullets.forEach(bullet => {
+        ctx.save();
+
+        // Move to bullet position and rotate
+        ctx.translate(bullet.x + bullet.width / 2, bullet.y + bullet.height / 2);
+        const angle = Math.atan2(bullet.dy, bullet.dx);
+        ctx.rotate(angle + Math.PI / 2); // Adjust rotation
+
+        // Draw bullet as a triangle
+        ctx.beginPath();
+        ctx.moveTo(0, -bullet.height / 2);
+        ctx.lineTo(-bullet.width / 2, bullet.height / 2);
+        ctx.lineTo(bullet.width / 2, bullet.height / 2);
+        ctx.closePath();
+
+        ctx.fillStyle = '#FF0000'; // Bullet color
+        ctx.fill();
+
+        ctx.restore();
+    });
+}
+
+function drawEnemyShips() {
+    enemyShips.forEach(enemy => {
+        ctx.save();
+        ctx.fillStyle = '#8B0000'; // Color of enemy ships
+        ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+        ctx.restore();
+    });
+}
+
+window.addEventListener('keydown', function(e) {
+    if (e.key === 'Space' || e.key === ' ') {
+        e.preventDefault();
+    }
+}, false);
