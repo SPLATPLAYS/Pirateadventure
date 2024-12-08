@@ -281,19 +281,6 @@ function drawShip() {
     ctx.translate(ship.x + ship.width / 2, ship.y + ship.height / 2);
     ctx.rotate(ship.rotation);
 
-    // Draw wake effect
-    ctx.beginPath();
-    ctx.moveTo(-ship.width / 2, ship.height / 2);
-    ctx.quadraticCurveTo(
-        -ship.width,
-        ship.height,
-        -ship.width * 1.5,
-        ship.height * 1.2
-    );
-    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-    ctx.stroke();
-    ctx.closePath(); // Close the wake path
-
     // Draw ship body
     ctx.beginPath();
     ctx.moveTo(-ship.width / 2, ship.height / 2);
@@ -303,13 +290,28 @@ function drawShip() {
     ctx.fillStyle = '#8B4513';
     ctx.fill();
 
-    // Add flag
+    // Draw ship details
+    // Draw sails
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.moveTo(0, -ship.height / 2);
+    ctx.lineTo(-10, -ship.height / 4);
+    ctx.lineTo(10, -ship.height / 4);
+    ctx.closePath();
+    ctx.fill();
+
+    // Draw cannons
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(-ship.width / 2 + 5, ship.height / 4, 10, 5);
+    ctx.fillRect(ship.width / 2 - 15, ship.height / 4, 10, 5);
+
+    // Draw flag
+    ctx.fillStyle = '#FF0000';
     ctx.beginPath();
     ctx.moveTo(0, -ship.height / 2);
     ctx.lineTo(-15, -ship.height / 2 - 15);
     ctx.lineTo(0, -ship.height / 2 - 10);
-    ctx.closePath(); // Close the flag path
-    ctx.fillStyle = '#FF0000';
+    ctx.closePath();
     ctx.fill();
 
     // Draw shield if active
@@ -319,7 +321,7 @@ function drawShip() {
         ctx.strokeStyle = 'rgba(65,105,225,0.5)';
         ctx.lineWidth = 3;
         ctx.stroke();
-        ctx.closePath(); // Close the shield path
+        ctx.closePath();
     }
 
     ctx.restore();
