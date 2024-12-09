@@ -47,6 +47,11 @@ const WEATHER_STATES = {
     STORM: 'storm'
 };
 
+const ENEMY_TYPES = {
+    RED_SQUARE: 'redSquare',
+    YELLOW_HEXAGON: 'yellowHexagon'
+};
+
 const API_BASE = 'https://my-own-counter-api-production.up.railway.app';
 const NAMESPACE = 'pirateadventure'; // Unique namespace for the game
 const LEADERBOARD_SIZE = 5; // Number of top scores to show
@@ -1089,15 +1094,29 @@ function handleCollisions() {
 
 function generateEnemyShip() {
     if (!gameOver) {
-        enemyShips.push({
+        let enemyType;
+        if (score >= 450) { // After reaching a score of 450
+            enemyType = Math.random() < 0.5 ? ENEMY_TYPES.RED_SQUARE : ENEMY_TYPES.YELLOW_HEXAGON;
+        } else {
+            enemyType = ENEMY_TYPES.RED_SQUARE;
+        }
+
+        const enemy = {
             x: Math.random() * (canvas.width - 50),
             y: -50,
             width: 50,
             height: 50,
-            dx: 0, // No horizontal movement
-            dy: ENEMY_SHIP_SPEED, // Move downward
-            shootCooldown: Math.random() * 1000 + 3000, // 3-4 seconds
-        });
+            dx: 0,
+            dy: ENEMY_SHIP_SPEED,
+            shootCooldown: Math.random() * 1000 + 3000,
+            type: enemyType
+        };
+
+        if (enemyType === ENEMY_TYPES.YELLOW_HEXAGON) {
+            enemy.shootCooldown /= 3; // Fire bullets 3x faster
+        }
+
+        enemyShips.push(enemy);
     }
 }
 
@@ -1105,38 +1124,30 @@ function updateEnemyShips() {
     enemyShips.forEach((enemy, index) => {
         enemy.y += enemy.dy;
 
-        // Decrease shoot cooldown
-        enemy.shootCooldown -= 16.67; // Approximate frame time in ms (assuming 60fps)
+        enemy.shootCooldown -= 16.67;
 
         if (enemy.shootCooldown <= 0) {
-            // Calculate direction towards the player
             const dx = (ship.x + ship.width / 2) - (enemy.x + enemy.width / 2);
             const dy = (ship.y + ship.height / 2) - (enemy.y + enemy.height);
             const distance = Math.sqrt(dx * dx + dy * dy);
-
-            // Normalize vector and multiply by speed
             const speedFactor = ENEMY_BULLET_SPEED / distance;
             const velocityX = dx * speedFactor;
             const velocityY = dy * speedFactor;
 
-            // Enemy shoots
             enemyBullets.push({
-                x: enemy.x + enemy.width / 2 - 5, // Adjust for bullet size
+                x: enemy.x + enemy.width / 2 - 5,
                 y: enemy.y + enemy.height,
-                width: 10,   // Increased bullet width
-                height: 20,  // Increased bullet height
+                width: 10,
+                height: 20,
                 dx: velocityX,
                 dy: velocityY,
             });
 
-            // Play shoot sound
             playSound('shoot');
 
-            // Reset cooldown to 3-4 seconds
-            enemy.shootCooldown = Math.random() * 1000 + 3000;
+            enemy.shootCooldown = enemy.type === ENEMY_TYPES.YELLOW_HEXAGON ? (Math.random() * 1000 + 3000) / 3 : Math.random() * 1000 + 3000;
         }
 
-        // Remove enemy if off-screen
         if (enemy.y > canvas.height) {
             enemyShips.splice(index, 1);
         }
@@ -1206,8 +1217,19 @@ function drawEnemyBullets() {
 function drawEnemyShips() {
     enemyShips.forEach(enemy => {
         ctx.save();
-        ctx.fillStyle = '#8B0000'; // Color of enemy ships
-        ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+        if (enemy.type === ENEMY_TYPES.RED_SQUARE) {
+            ctx.fillStyle = '#8B0000';
+            ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+        } else if (enemy.type === ENEMY_TYPES.YELLOW_HEXAGON) {
+            ctx.fillStyle = '#FFD700';
+            ctx.translate(enemy.x + enemy.width / 2, enemy.y + enemy.height / 2);
+            ctx.beginPath();
+            for (let i = 0; i < 6; i++) {
+                ctx.lineTo(enemy.width / 2 * Math.cos(i * Math.PI / 3), enemy.height / 2 * Math.sin(i * Math.PI / 3));
+            }
+            ctx.closePath();
+            ctx.fill();
+        }
         ctx.restore();
     });
 }
